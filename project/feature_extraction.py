@@ -1,4 +1,4 @@
-from collections import namedtuple
+from collections import OrderedDict
 
 from torch import nn
 from project.datasets import tokens_to_ids, vocab_size
@@ -125,10 +125,11 @@ class ImageFeatureExtractor(nn.Module):
         if projection_in == 'infer':
             projection_in = models_[encoder]['features_out']
         if projection_in:
-            self.projector = nn.Sequential(
-                nn.Linear(projection_in, projection_out),
-                nn.ReLU()
-            )
+            self.projector = nn.Sequential(OrderedDict([
+                ('linear', nn.Linear(projection_in, projection_out)),
+                 ('relu', nn.ReLU())
+            ]))
+            
         else:
             projection_in = None
             self.projector = None
@@ -149,17 +150,17 @@ class ImageFeatureExtractor(nn.Module):
             if self.convolution:
                 nn.init.kaiming_normal_(self.convolution.weight)
             if self.projector:
-                nn.init.kaiming_normal_(self.projector.weight)
+                nn.init.kaiming_normal_(self.projector.linear.weight)
         elif method == 'xavier':
             if self.convolution:
                 nn.init.xavier_normal_(self.convolution.weight)
             elif self.projector:
-                nn.init.xavier_normal_(self.projector.weight)
+                nn.init.xavier_normal_(self.projector.linear.weight)
         
         if self.convolution:
             nn.init.zeros_(self.convolution.bias)
         if self.projector:
-            nn.init.zeros_(self.projector.bias)
+            nn.init.zeros_(self.projector.linear.bias)
 
     def forward(self, image):
         raise NotImplementedError("Don't the extractor directly; use the "

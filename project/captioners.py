@@ -170,11 +170,7 @@ class CaptioningRNN(pl.LightningModule):
             x = self.image_extractor.convolution(x)  # (N, hidden_size, pixels, pixels)
             pixels = x.shape[-1]
 
-        captions = [
-            self._pad * x.new(batch_size, max_length).fill_(1).long()
-            ] * n_captions
-        captions = torch.stack(captions, dim=1)
-        captions_start = torch.empty((batch_size, n_captions, max_length + 1), device=x.device, dtype=torch.long)        
+        captions = torch.empty((batch_size, n_captions, max_length + 1), device=x.device, dtype=torch.long)        
         
         y = torch.tensor([self._start] * batch_size, device=x.device).view(batch_size, -1)
         y = self.word_embedder(y)
@@ -182,9 +178,8 @@ class CaptioningRNN(pl.LightningModule):
         cn, states, features = None, None, None
         
         if self.rnn_type in ('rnn', 'gru', 'lstm', 'attention'):
-            # Build predictions network-by-network and word-by-word
+            # Build predictions network-by-network
             for i in range(captions.shape[1]):
-                # Outer loop: network (initialize hidden states here)
                 if self.rnn_type in ('rnn', 'gru', 'lstm'):
                     hn = x.unsqueeze(0).repeat(self.num_rnn_layers * self.num_rnn_directions, 1, 1)
                 elif self.rnn_type == 'attention':
@@ -193,7 +188,7 @@ class CaptioningRNN(pl.LightningModule):
                     features = x
                 if self.rnn_type == 'lstm':
                     states = (hn, torch.zeros_like(hn))
-                captions_start[:, i, :] = batch_beam_search(
+                captions[:, i, :] = batch_beam_search(
                     rnn_captioner=self,
                     yns=yn,
                     hns=hn,
@@ -205,25 +200,11 @@ class CaptioningRNN(pl.LightningModule):
                     alpha=1.,
                     beam_width=2,
                 )
-                
-                for t in range(max_length):
-                    # Inner loop: sequence - feed hidden states back in recurrence relation
-                    if self.rnn_type in ('rnn', 'gru'):
-                        output, hn = getattr(self.decoder, "rnn%d" % i)(yn, hn)
-                    elif self.rnn_type == 'lstm':
-                        output, states = getattr(self.decoder, "rnn%d" % i)(yn, states)
-                    elif self.rnn_type == 'attention':
-                        output, hn, cn = getattr(self.decoder, "rnn%d" % i)(yn, x, hn, cn)
-                    scores = getattr(self.fc_scorer, "fc%d" % i)(output)
-                    _, idx = scores.max(dim=2)
-                    top_win, idxs = scores.topk(5, dim=2)
-                    yn = self.word_embedder(idx).view(batch_size, 1, -1)
-                    captions[:, i, t] = idx.view(-1)
         
         if return_attn and self.rnn_type == 'attention':
             return captions, attn_weights
         else:
-            return captions, captions_start
+            return captions
 
         # Recursive beam search?
     def beam_search(self, candidates, beam_width=10, step=None):
