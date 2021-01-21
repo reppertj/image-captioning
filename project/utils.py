@@ -9,7 +9,7 @@ import wandb
 from torchvision.transforms import ToPILImage
 import matplotlib.pyplot as plt
 from project.datasets import NormalizeInverse, ids_to_captions
-from project.captioners import CaptioningRNN
+
 
 inv_normalize = NormalizeInverse()
 
@@ -74,13 +74,13 @@ class Candidate:
 class PQCandidate:
     priority: float = 0.0
     candidate: Candidate = Any
-    
+
     def __lt__(self, other):
         return self.priority < other.priority
 
 
 def batch_beam_search(
-    rnn_captioner: CaptioningRNN,
+    rnn_captioner,
     yns: torch.Tensor,
     hns: Union[torch.Tensor, None],
     cns: Union[torch.Tensor, None],
@@ -93,24 +93,35 @@ def batch_beam_search(
 ):
     """[summary]
     yn: (batch_size, 1, wordvec_dim)
-    hn, cn, state[0], state[1]: (batch_size, 1, hidden_dim)
+    hn, cn, state[0], state[1]: (batch_size, 1, hidden_size)
     features: (batch_size, num_features, pixels, pixels)
     """
-    batch_size = yns.shape[0]    
-    
-    captions = torch.full((batch_size, max_length + 1), rnn_captioner._pad, device=yns.device, dtype=torch.long)
+    batch_size = yns.shape[0]
+
+    captions = torch.full(
+        (batch_size, max_length + 1),
+        rnn_captioner._pad,
+        device=yns.device,
+        dtype=torch.long,
+    )
     captions[:, 0] = rnn_captioner._start
 
     for i in range(batch_size):
         yn = yns[i : i + 1, :, :]
-        hn = None if hns is None else hns[i : i + 1, :, :]
-        cn = None if cns is None else cns[i : i + 1, :, :]
-        state = None if states is None else (states[0][i : i + 1, :, :], states[1][i : i + 1, :, :])
-        feature = None if features is None else features[i : i + 1, :, :, :]
+        hn = None if hns is None else hns[:, i : i + 1, :]  # (rnn_depth, 1, hidden_size)
+        cn = None if cns is None else cns[:, i : i + 1, :]  # (rnn_depth, 1, hidden_size)
+        state = (
+            None
+            if states is None
+            else (states[0][:, i : i + 1, :], states[1][:, i : i + 1, :])
+        )
+        feature = None if features is None else features[i : i + 1, :, :, :]  # (1, num_features, pixels, pixels)
         best = single_beam_search(
             [
                 PQCandidate(
-                    candidate=Candidate(words_so_far=[], yn=yn, hn=hn, cn=cn, states=state)
+                    candidate=Candidate(
+                        words_so_far=[], yn=yn, hn=hn, cn=cn, states=state
+                    )
                 )
             ],
             rnn_captioner=rnn_captioner,
@@ -120,13 +131,15 @@ def batch_beam_search(
             alpha=alpha,
             beam_width=beam_width,
         )
-        captions[i, 1:] = torch.tensor(best.candidate.words_so_far, dtype=captions.dtype, device=captions.device)
+        captions[i, 1:] = torch.tensor(
+            best.candidate.words_so_far, dtype=captions.dtype, device=captions.device
+        )
     return captions
 
 
 def single_beam_search(
     candidates: List[PQCandidate],
-    rnn_captioner: CaptioningRNN,
+    rnn_captioner,
     features: Union[torch.Tensor, None],
     num_words_left: int,
     which_rnn: int = 0,
@@ -161,7 +174,7 @@ def single_beam_search(
 
 def get_new_candidates(
     pqcandidate: PQCandidate,
-    rnn_captioner: CaptioningRNN,
+    rnn_captioner,
     features: Union[torch.Tensor, None] = None,
     which_rnn: int = 0,
     num_new: int = 1,
@@ -183,7 +196,11 @@ def get_new_candidates(
     old_priority = pqcandidate.priority
     assert candidate.yn.shape == (1, 1, rnn_captioner.word_embedder.wordvec_dim)
     if candidate.hn is not None:
-        assert candidate.hn.shape == (1, rnn_captioner.decoder.hidden_size)
+        assert candidate.hn.shape == (
+            rnn_captioner.num_rnn_layers * rnn_captioner.num_rnn_directions * 1,
+            1,
+            rnn_captioner.decoder.hidden_size,
+        )
     if candidate.cn is not None:
         assert candidate.cn.shape == (1, rnn_captioner.decoder.hidden_size)
     if candidate.states is not None:
@@ -193,7 +210,7 @@ def get_new_candidates(
         assert features.shape[:2] == (1, rnn_captioner.decoder.num_features)
     if rnn_captioner.rnn_type in ("rnn", "gru"):
         output, hn = getattr(rnn_captioner.decoder, "rnn%d" % which_rnn)(
-            candidate.yn, candidate.hn
+            candidate.yn, candidate.hn.contiguous()
         )
         cn, states = None, None
     elif rnn_captioner.rnn_type == "lstm":
@@ -202,7 +219,6 @@ def get_new_candidates(
         )
         hn, cn = None, None
     else:  # rnn_captioner.rnn_type == 'attention'
-        print('attention')
         output, hn, cn = getattr(rnn_captioner.decoder, "rnn%d" % which_rnn)(
             candidate.yn, features, candidate.hn, candidate.cn
         )
@@ -212,7 +228,7 @@ def get_new_candidates(
     topk_scores = F.log_softmax(topk_scores, dim=2).squeeze()  # (num_new,)
     yns = rnn_captioner.word_embedder(idxs).squeeze()  # (num_new, wordvec_dim)
     idxs = idxs.squeeze()  # (num_new,)
-    
+
     if num_new == 1:
         topk_scores = topk_scores.unsqueeze(0)
         idxs = idxs.unsqueeze(0)
