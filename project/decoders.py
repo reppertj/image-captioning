@@ -282,10 +282,11 @@ class ParallelAttentionLSTM(nn.Module):
                     "rnn%d" % i
                 )(wds[:, i, :, :], feat)
         else:
-            rnn_outs["rnn%d" % i] = getattr(
-                self,
-                "rnn%d" % i
-            )(wds[:, i, :, :], feat, hn[:, i, :], cn[:, i, :])
+            for i in range(self.num_rnns):
+                rnn_outs["rnn%d" % i] = getattr(
+                    self,
+                    "rnn%d" % i
+                )(wds[:, i, :, :], feat, hn[:, i, :], cn[:, i, :])
         return rnn_outs
 
 class AttentionLSTM(nn.Module):

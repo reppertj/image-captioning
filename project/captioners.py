@@ -54,6 +54,7 @@ class CaptioningRNN(pl.LightningModule):
             "resnet152",
             "mobilenetv2",
             "vgg16",
+            "resnext50",
         }:
             raise ValueError(f"Encoder {image_encoder} not implemented")
 
@@ -205,7 +206,7 @@ class CaptioningRNN(pl.LightningModule):
                     features=features,
                     max_length=self.datamodule.max_caption_length,
                     which_rnn=i,
-                    alpha=0.7,
+                    alpha=1.0,
                     beam_width=10,
                 )
 
@@ -287,4 +288,12 @@ class CaptioningRNN(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        return optimizer
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, patience=5, min_lr=1e-6
+        )
+        return {
+            "optimizer": optimizer,
+            "scheduler": scheduler,
+            "monitor": "val_loss",
+        }
+

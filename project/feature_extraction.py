@@ -40,6 +40,12 @@ models_ = {
         'pooling': True,
         'remove_last': 2,
     },
+    'resnext50': {
+        'model': torchvision.models.resnext50_32x4d,
+        'features_out': 2048,
+        'pooling': True,
+        'remove_last': 2,
+    }
 }
 
 class ImageFeatureExtractor(nn.Module):

@@ -108,14 +108,20 @@ def batch_beam_search(
 
     for i in range(batch_size):
         yn = yns[i : i + 1, :, :]
-        hn = None if hns is None else hns[:, i : i + 1, :]  # (rnn_depth, 1, hidden_size)
-        cn = None if cns is None else cns[:, i : i + 1, :]  # (rnn_depth, 1, hidden_size)
+        hn = (
+            None if hns is None else hns[:, i : i + 1, :]
+        )  # (rnn_depth, 1, hidden_size)
+        cn = (
+            None if cns is None else cns[:, i : i + 1, :]
+        )  # (rnn_depth, 1, hidden_size)
         state = (
             None
             if states is None
             else (states[0][:, i : i + 1, :], states[1][:, i : i + 1, :])
         )
-        feature = None if features is None else features[i : i + 1, :, :, :]  # (1, num_features, pixels, pixels)
+        feature = (
+            None if features is None else features[i : i + 1, :, :, :]
+        )  # (1, num_features, pixels, pixels)
         best = single_beam_search(
             [
                 PQCandidate(
@@ -194,20 +200,6 @@ def get_new_candidates(
     """
     candidate = pqcandidate.candidate
     old_priority = pqcandidate.priority
-    assert candidate.yn.shape == (1, 1, rnn_captioner.word_embedder.wordvec_dim)
-    if candidate.hn is not None:
-        assert candidate.hn.shape == (
-            rnn_captioner.num_rnn_layers * rnn_captioner.num_rnn_directions * 1,
-            1,
-            rnn_captioner.decoder.hidden_size,
-        )
-    if candidate.cn is not None:
-        assert candidate.cn.shape == (1, rnn_captioner.decoder.hidden_size)
-    if candidate.states is not None:
-        assert candidate.states[0].shape == (1, 1, rnn_captioner.decoder.hidden_size)
-        assert candidate.states[1].shape == (1, 1, rnn_captioner.decoder.hidden_size)
-    if features is not None:
-        assert features.shape[:2] == (1, rnn_captioner.decoder.num_features)
     if rnn_captioner.rnn_type in ("rnn", "gru"):
         output, hn = getattr(rnn_captioner.decoder, "rnn%d" % which_rnn)(
             candidate.yn, candidate.hn.contiguous()
@@ -215,7 +207,8 @@ def get_new_candidates(
         cn, states = None, None
     elif rnn_captioner.rnn_type == "lstm":
         output, states = getattr(rnn_captioner.decoder, "rnn%d" % which_rnn)(
-            candidate.yn, candidate.states
+            candidate.yn,
+            (candidate.states[0].contiguous(), candidate.states[1].contiguous()),
         )
         hn, cn = None, None
     else:  # rnn_captioner.rnn_type == 'attention'
@@ -252,20 +245,3 @@ def get_new_candidates(
             ),
         )
     return ret
-
-    # x: hidden_dim
-    # scores: vocab_size
-    # idxs: beam_width
-    # winners:
-    # output: hidden_size
-    # beam_width
-
-    # @dataclass
-    # class Candidate:
-    #     words_so_far: list
-    #     yn: torch.tensor  # (wordvec_dim,)
-    #     hn: Union[torch.Tensor, None]  # (hidden_dim,)
-    #     cn: Union[torch.Tensor, None]  # (hidden_dim,)
-    #     states: Union[tuple, None]
-
-    return
