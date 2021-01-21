@@ -102,7 +102,7 @@ class ImageFeatureExtractor(nn.Module):
             try:
                 self.encoder = models_[encoder]['model'](pretrained=True)
             except ValueError:
-                raise ValueError(f'Encoder {model} not supported')
+                raise ValueError(f'Encoder {encoder} not supported')
         else:
             self.encoder = encoder
         if freeze_weights:        
