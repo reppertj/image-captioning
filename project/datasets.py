@@ -3,10 +3,14 @@ Classes and utility functions for loading image classification datasets
 """
 import os
 import json
+from project.simple_tokenizer import WordTokenizer
+from re import sub
 from string import ascii_lowercase
+from typing import List, Union
 
 import numpy as np
 import pandas as pd
+from nltk.translate.bleu_score import corpus_bleu
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 import pytorch_lightning as pl
@@ -17,10 +21,10 @@ from sklearn.model_selection import train_test_split
 import torch
 from torch import nn
 
-BOS = "[CLS]"
-EOS = "[SEP]"
-UNK = "[UNK]"
-PAD = "[PAD]"
+BOS = "[cls]"
+EOS = "[sep]"
+UNK = "[unk]"
+PAD = "[pad]"
 
 
 def load_coco_captions_json(json_path, img_dir):
@@ -89,6 +93,17 @@ def load_flickr_csv(csv_path, img_dir):
     return captions_df
 
 
+def remove_prefixes(captions_df: pd.DataFrame, prefixes: List[str]):
+    """Strip a list of prefixes from captions (columns 1:end) of a
+    pandas dataframe and return a copy.
+    """
+    for prefix in prefixes:
+        captions_df.iloc[:, 1:] = captions_df.iloc[:, 1:].applymap(
+            lambda s: sub("^\s*" + prefix, "", s)
+        )
+    return captions_df
+
+
 def train_tokenizer_from_df(
     df,
     directory,
@@ -97,11 +112,12 @@ def train_tokenizer_from_df(
     min_frequency,
     max_caption_length,
     special_tokens,
+    use_bert_wordpiece=True,
 ):
-    """ 
+    """
     Trains a tokenizer from a dataframe and saves to disk. Uses minimal alphabet
     of ascii lowercase plus up to 30 characters.
-    
+
     Args:
         df: The dataframe containing the input strings. Skips the first column.
         directory: directory in which to save tokenizer files
@@ -110,11 +126,16 @@ def train_tokenizer_from_df(
         min_frequency: required number of occurrences for a token
         special_tokens: list of special tokens for the model
     """
-    tokenizer = BertWordPieceTokenizer(lowercase=True)
-    tokenizer.enable_padding(length=max_caption_length, pad_id=0, pad_token=PAD)
-    tokenizer.enable_truncation(
-        max_length=max_caption_length, stride=0, strategy="longest_first"
-    )
+    if use_bert_wordpiece:
+        tokenizer = BertWordPieceTokenizer(lowercase=True)
+        tokenizer.enable_padding(length=max_caption_length, pad_id=0, pad_token=PAD)
+        tokenizer.enable_truncation(
+            max_length=max_caption_length, stride=0, strategy="longest_first"
+        )
+    else:
+        tokenizer = WordTokenizer()
+        tokenizer.enable_truncation(max_caption_length)
+        tokenizer.enable_padding()
     strings = df.iloc[:, 1:].stack(-1).reset_index(drop=True)
     strings.to_csv(os.path.join(directory, filename), header=False, index=False)
     tokenizer.train(
@@ -155,7 +176,7 @@ def vocab_size(tokenizer):
     return tokenizer.get_vocab_size()
 
 
-def ids_to_captions(ids_tensor, tokenizer, remove_special_tokens=False):
+def ids_to_captions(ids_tensor, tokenizer, skip_special_tokens=False):
     """
     Return a single captions or group of captions from a rank-1 or rank-2
     tensor of ids using a tokenizer.
@@ -164,12 +185,32 @@ def ids_to_captions(ids_tensor, tokenizer, remove_special_tokens=False):
         ids_tensor = ids_tensor.reshape(1, -1)
     ids_tensor = ids_tensor.cpu()
     strings = tokenizer.decode_batch(ids_tensor.tolist(), skip_special_tokens=False)
-    if remove_special_tokens:
+    if skip_special_tokens:
         strings = list(map(lambda s: s.lstrip(BOS).partition(EOS)[0], strings))
     return strings
 
 
-def sample_minibatch(minibatch, datamodule, remove_special_tokens=True):
+def corpus_bleu_score(
+    preds: torch.Tensor, gt: torch.Tensor, tokenizer, weights=(0.25, 0.25, 0.25, 0.25)
+):
+    """ Returns possibly weighted average of 1, 2, 3, and 4-gram corpus BLEU scores
+    for a batch of predictions and ground truths. The tokenizer is 
+    used to strip special characters and padding and (if relevant)
+    reconstruct words from sub-words.
+
+    Arguments:
+        preds {torch.Tensor} -- (N, seq_len)
+        gt {torch.Tensor} -- (N, num_gt, seq_len)
+    """
+    preds = [s.strip().split(" ") for s in ids_to_captions(preds, tokenizer, True)]
+    gt = [
+        [s.strip().split(" ") for s in ids_to_captions(lst, tokenizer, True)]
+        for lst in gt
+    ]
+    return corpus_bleu(gt, preds, weights=weights)
+
+
+def sample_minibatch(minibatch, tokenizer, remove_special_tokens=True):
     """
     Sample a minibatch and show the images and captions.
     """
@@ -180,14 +221,14 @@ def sample_minibatch(minibatch, datamodule, remove_special_tokens=True):
         plt.imshow(sample_images[i].permute(1, 2, 0).clip(0, 1).cpu())
         plt.axis("off")
         caption_strs = ids_to_captions(
-            sample_captions[i], datamodule.tokenizer, remove_special_tokens
+            sample_captions[i], tokenizer, remove_special_tokens
         )
         plt.title("\n".join(caption_strs))
         plt.show()
 
 
-def visualize_tensor_image(image):
-    """ Does not undo normalization """
+def visualize_tensor_image(image: torch.Tensor):
+    """ (C, H, W) Does not undo normalization """
     with torch.no_grad():
         if len(image.shape) == 3:
             image = image.unsqueeze(0)
@@ -215,10 +256,10 @@ class NormalizeInverse(transforms.Normalize):
         return super().__call__(tensor.clone())
 
 
-class FlickrDataset(Dataset):
+class CaptioningDataset(Dataset):
     """
-    Builds a pytorch dataset of Flickr 30k images. You probably do not want to
-    create this class directly. Instead, use a FlickrDataModule to instantiate
+    Pytorch dataset of Flickr and COCO images and captions. You probably do not want to
+    create this class directly. Instead, use a CombinedDataModule to instantiate
     datasets.
     """
 
@@ -281,7 +322,7 @@ class FlickrDataset(Dataset):
         return {"image": image, "captions": captions}
 
 
-class FlickrDatasetBuilder:
+class DatasetBuilder:
     """ Utility class to reduce boilerplate in data module """
 
     def __init__(
@@ -306,7 +347,7 @@ class FlickrDatasetBuilder:
 
     def new(self, split):
         if split in ("val", "test"):
-            return FlickrDataset(
+            return CaptioningDataset(
                 self.captions_df,
                 split,
                 self.val_transform,
@@ -315,7 +356,7 @@ class FlickrDatasetBuilder:
                 self.test_size,
             )
         else:
-            return FlickrDataset(
+            return CaptioningDataset(
                 self.captions_df,
                 split,
                 self.transform,
@@ -333,10 +374,15 @@ class TokenizeTransform:
 
     def __call__(self, captions):
         """ A list of strings to a tensor """
-        return torch.tensor([t.ids for t in self.tokenizer.encode_batch(captions)])
+        if isinstance(self.tokenizer, BertWordPieceTokenizer):
+            return torch.tensor([t.ids for t in self.tokenizer.encode_batch(captions)])
+        else:
+            return torch.tensor([t for t in self.tokenizer.encode_batch(captions)])
 
 
 class ShuffleCaptions:
+    """ Shuffle a (n_captions, seq_len) tensor of captions """
+
     __slots__ = []
 
     def __call__(self, tensor):
@@ -350,10 +396,10 @@ class CombinedDataModule(pl.LightningDataModule):
     https://www.kaggle.com/hsankesara/flickr-image-dataset and
     https://cocodataset.org/#home
 
-    The data loaders iterate over dicts of 'image' and 'captions',
-    where 'image' is a (batch_size x channels x height x width) tensor and lists
+    The dataloaders return iterators of dicts of 'image' and 'captions',
+    where 'image' is a (N, C, H, W) batch tensor of images and lists
     of captions, or, if transformed by the tokenizer (target_transform=`auto`),
-    a (batch_size x captions_per_image x tokenizer_length) tensor of tokenized
+    a (N, n_captions, vocab_size) batch tensor of tokenized
     captions.
 
     You must call `setup` first to make the dataloaders available.
@@ -365,16 +411,19 @@ class CombinedDataModule(pl.LightningDataModule):
         flickr_dir=None,
         coco_json=None,
         coco_dir=None,
+        use_bert_wordpiece=True,
+        pretrained_tokenizer: Union[None, WordTokenizer, BertWordPieceTokenizer] = None,
         batch_size=64,
         val_size=1024,
         test_size=1024,
+        remove_prefixes=True,
         transform="augment",  # 'normalize' to only normalize
         target_transform="shuffle",
         val_transform="normalize",
         val_target_transform="tokenize",
         vocab_size=5000,
         min_word_occurrences=1,
-        max_caption_length=20,
+        max_caption_length=25,
         dev_set=None,  # int to limit datamodule size
         num_workers=4,
         pin_memory=True,
@@ -388,12 +437,28 @@ class CombinedDataModule(pl.LightningDataModule):
         self.val_size = val_size
         self.test_size = test_size
 
+        self.remove_prefixes = (
+            [
+                "there is",
+                "there are",
+                "this is",
+                "these are",
+                "a photo of",
+                "a picture of",
+                "an image of",
+            ]
+            if remove_prefixes is True
+            else remove_prefixes
+        )
+
         self.transform = transform
         self.target_transform = target_transform
         self.val_transform = val_transform
         self.val_target_transform = val_target_transform
 
-        self.tokenizer = None
+        self.tokenizer = pretrained_tokenizer
+        
+        self.use_bert_wordpiece = use_bert_wordpiece
 
         self.vocab_size = vocab_size
         self.min_word_occurrences = min_word_occurrences
@@ -405,14 +470,11 @@ class CombinedDataModule(pl.LightningDataModule):
         self.pin_memory = pin_memory
 
         self.is_setup = False
-
-    def prepare_data(self):
-        pass
-
+    
     def setup(self, stage=None):
         if self.is_setup:
-            # Because we're shuffling the input, setup is not idempotent.
-            # Work around that by short-circuiting
+            """ Because we're shuffling the input, setup is not idempotent
+            without this."""
             self.make_loader(stage)
             return None
         if self.flickr_csv is not None:
@@ -431,19 +493,24 @@ class CombinedDataModule(pl.LightningDataModule):
         np.random.shuffle(idxs)
         captions_df = captions_df.iloc[idxs, :].reset_index(drop=True)
 
+        if self.remove_prefixes:
+            captions_df = remove_prefixes(captions_df, self.remove_prefixes)
+
         if self.dev_set:
             captions_df = captions_df.iloc[: self.dev_set]
         self.captions_df, self.special_tokens = add_special_tokens(captions_df)
 
-        self.tokenizer = train_tokenizer_from_df(
-            self.captions_df,
-            ".",
-            "flickr30k_tokenizer",
-            self.vocab_size,
-            self.min_word_occurrences,
-            self.max_caption_length,
-            self.special_tokens,
-        )
+        if not self.tokenizer:
+            self.tokenizer = train_tokenizer_from_df(
+                self.captions_df,
+                ".",
+                "flickr30k_tokenizer",
+                self.vocab_size,
+                self.min_word_occurrences,
+                self.max_caption_length,
+                self.special_tokens,
+                use_bert_wordpiece=self.use_bert_wordpiece
+            )
 
         if self.transform == "augment":
             random_xforms = [
@@ -489,17 +556,17 @@ class CombinedDataModule(pl.LightningDataModule):
 
         if self.target_transform == "shuffle":
             self.target_transform = transforms.Compose(
-                [TokenizeTransform(self.tokenizer), ShuffleCaptions(),]
+                [TokenizeTransform(self.tokenizer), ShuffleCaptions()]
             )
         elif self.target_transform == "tokenize":
             self.target_transform = transforms.Compose(
-                [TokenizeTransform(self.tokenizer),]
+                [TokenizeTransform(self.tokenizer)]
             )
 
         if self.val_target_transform == "tokenize":
             self.val_target_transform = TokenizeTransform(self.tokenizer)
 
-        self.dbuild = FlickrDatasetBuilder(
+        self.dbuild = DatasetBuilder(
             self.captions_df,
             self.transform,
             self.target_transform,
