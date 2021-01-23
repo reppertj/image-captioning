@@ -1,11 +1,6 @@
 import pandas as pd
 import torch
-from project.datasets import train_tokenizer_from_df, PAD, BOS, EOS, UNK
-from project.feature_extraction import (
-    ImageFeatureExtractor,
-    WordEmbedder,
-)
-from pytest import mark
+from project.feature_extraction import ImageFeatureExtractor
 from pytorch_lightning import seed_everything
 from torch import nn
 
