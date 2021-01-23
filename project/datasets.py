@@ -150,6 +150,23 @@ def train_tokenizer_from_df(
     return tokenizer
 
 
+def load_pretrained_tokenizer(vocab_path, max_caption_length, special_tokens):
+    pad_token, cls_token, sep_token, unk_token = special_tokens
+    tokenizer = BertWordPieceTokenizer(
+        vocab_path,
+        pad_token=pad_token,
+        unk_token=unk_token,
+        sep_token=sep_token,
+        cls_token=cls_token,
+        lowercase=True,
+    )
+    tokenizer.enable_padding(length=max_caption_length, pad_id=0, pad_token=PAD)
+    tokenizer.enable_truncation(
+        max_length=max_caption_length, stride=0, strategy="longest_first"
+    )
+    return tokenizer
+
+
 def add_special_tokens(df, pad=PAD, start=BOS, end=EOS, unk=UNK):
     """
     Add the start and end tokens to the strings in columns 1 -> end of a
@@ -194,7 +211,7 @@ def corpus_bleu_score(
     preds: torch.Tensor, gt: torch.Tensor, tokenizer, weights=(0.25, 0.25, 0.25, 0.25)
 ):
     """ Returns possibly weighted average of 1, 2, 3, and 4-gram corpus BLEU scores
-    for a batch of predictions and ground truths. The tokenizer is 
+    for a batch of predictions and ground truths. The tokenizer is
     used to strip special characters and padding and (if relevant)
     reconstruct words from sub-words.
 
@@ -411,8 +428,8 @@ class CombinedDataModule(pl.LightningDataModule):
         flickr_dir=None,
         coco_json=None,
         coco_dir=None,
+        pretrained_vocab: Union[None, os.PathLike] = None,
         use_bert_wordpiece=True,
-        pretrained_tokenizer: Union[None, WordTokenizer, BertWordPieceTokenizer] = None,
         batch_size=64,
         val_size=1024,
         test_size=1024,
@@ -456,8 +473,8 @@ class CombinedDataModule(pl.LightningDataModule):
         self.val_transform = val_transform
         self.val_target_transform = val_target_transform
 
-        self.tokenizer = pretrained_tokenizer
-        
+        self.pretrained_vocab = pretrained_vocab
+
         self.use_bert_wordpiece = use_bert_wordpiece
 
         self.vocab_size = vocab_size
@@ -470,7 +487,7 @@ class CombinedDataModule(pl.LightningDataModule):
         self.pin_memory = pin_memory
 
         self.is_setup = False
-    
+
     def setup(self, stage=None):
         if self.is_setup:
             """ Because we're shuffling the input, setup is not idempotent
@@ -500,7 +517,7 @@ class CombinedDataModule(pl.LightningDataModule):
             captions_df = captions_df.iloc[: self.dev_set]
         self.captions_df, self.special_tokens = add_special_tokens(captions_df)
 
-        if not self.tokenizer:
+        if not self.pretrained_vocab:
             self.tokenizer = train_tokenizer_from_df(
                 self.captions_df,
                 ".",
@@ -509,7 +526,11 @@ class CombinedDataModule(pl.LightningDataModule):
                 self.min_word_occurrences,
                 self.max_caption_length,
                 self.special_tokens,
-                use_bert_wordpiece=self.use_bert_wordpiece
+                use_bert_wordpiece=self.use_bert_wordpiece,
+            )
+        else:
+            self.tokenizer = load_pretrained_tokenizer(
+                self.pretrained_vocab, self.max_caption_length, self.special_tokens
             )
 
         if self.transform == "augment":
@@ -621,4 +642,3 @@ class CombinedDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
         )
-
