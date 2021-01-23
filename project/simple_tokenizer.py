@@ -16,10 +16,10 @@ class WordTokenizer:
         self.padding = False
         self.truncation = False
         self.is_trained = False
-        
+
     def check_trained(self):
         if not self.is_trained:
-            raise ValueError('Train tokenizer before using it')
+            raise ValueError("Train tokenizer before using it")
 
     def train(
         self,
@@ -44,13 +44,15 @@ class WordTokenizer:
             limit_alphabet {int} -- Ignored; in for API compatibility (default: {None})
         """
         if self.is_trained:
-            raise ValueError("Don't retrain; use a new instance instead")
+            raise ValueError("Don't retrain; load config or use a new instance instead")
         self.max_vocab_size = vocab_size
         self.min_frequency = min_frequency
-        
+
         if len(special_tokens) != 4:
-            raise ValueError('Special tokens must have exactly 4 values: PAD, BOS, EOS, UNK')
-        
+            raise ValueError(
+                "Special tokens must have exactly 4 values: PAD, BOS, EOS, UNK"
+            )
+
         self.special_tokens = special_tokens
 
         for t in self.special_tokens:
@@ -63,6 +65,7 @@ class WordTokenizer:
         list(map(lambda lst: counter.update(lst), data))
         vocab = counter.most_common(self.max_vocab_size - len(self.tokens))
         vocab = filter(lambda tup: tup[1] >= self.min_frequency, vocab)
+        vocab = filter(lambda tup: tup[0] not in self.tokens, vocab)
         for word, _ in vocab:
             self.tokens[word] = next(self._incrementer)
         self.ids = {v: k for k, v in self.tokens.items()}
@@ -100,7 +103,9 @@ class WordTokenizer:
             if self.truncation and len(split) > self.max_length:
                 split = split[: self.max_length]
             if self.padding and len(split) < self.max_length:
-                split = split + [self.special_tokens[0]] * (self.max_length - len(split))
+                split = split + [self.special_tokens[0]] * (
+                    self.max_length - len(split)
+                )
             yield list(map(lambda w: self.tokens.get(w, 3), split))
 
     def save_model(self, directory, filename):
@@ -121,4 +126,11 @@ class WordTokenizer:
     def enable_truncation(self, max_length):
         self.truncation = True
         self.max_length = max_length
+
+    @property
+    def config(self):
+        return self.__dict__
+
+    def load_config(self, config):
+        self.__dict__.update(config)
 
