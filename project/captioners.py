@@ -1,3 +1,6 @@
+from typing import Dict, Union
+from pytorch_lightning.core.datamodule import LightningDataModule
+from project.simple_tokenizer import WordTokenizer
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -14,36 +17,26 @@ from project.utils import batch_beam_search, log_wandb_preds
 
 class CaptioningRNN(pl.LightningModule):
     def __init__(
-        self,
-        datamodule,
-        batch_size=64,
-        wordvec_dim=768,
-        hidden_size=512,
-        wd_embedder_init="kaiming",
-        image_encoder="mobilenetv2",
-        encoder_init="kaiming",
-        rnn_type="rnn",
-        num_rnns=5,
-        num_rnn_layers=2,
-        rnn_nonlinearity="relu",
-        rnn_init="kaiming",
-        rnn_dropout=0.5,
-        rnn_bidirectional=False,
-        fc_init="kaiming",
-        learning_rate=3e-4,
+        self, datamodule: LightningDataModule, config: Union[Dict, None] = None,
     ):
         """
         
         """
         super().__init__()
 
-        self.batch_size = batch_size
-        self.datamodule = datamodule
-        self.datamodule.setup()
-        self.val_bleu = CorpusBleu(self.datamodule.tokenizer)
-        self.test_bleu = CorpusBleu(self.datamodule.tokenizer)
+        if config is None:
+            config = CaptioningRNN.default_config()
 
-        if isinstance(image_encoder, str) and image_encoder not in {
+        self.batch_size = config["batch_size"]
+        self.datamodule = datamodule
+        self.tokenizer = self.datamodule.tokenizer
+
+        self.max_length = config["max_length"]
+
+        self.val_bleu = CorpusBleu(self.tokenizer)
+        self.test_bleu = CorpusBleu(self.tokenizer)
+
+        if isinstance(config["image_encoder"], str) and config["image_encoder"] not in {
             "resnet50",
             "resnet101",
             "resnet152",
@@ -51,94 +44,102 @@ class CaptioningRNN(pl.LightningModule):
             "vgg16",
             "resnext50",
         }:
-            raise ValueError(f"Encoder {image_encoder} not implemented")
+            raise ValueError(f"Encoder {config['image_encoder']} not implemented")
 
-        if rnn_type not in ("rnn", "gru", "lstm", "attention"):
-            raise ValueError(f"RNN type {rnn_type} not implemented")
+        if config["rnn_type"] not in ("rnn", "gru", "lstm", "attention"):
+            raise ValueError(f"RNN type {config['rnn_type']} not implemented")
 
-        self.rnn_type = rnn_type
+        self.rnn_type = config["rnn_type"]
 
         if self.rnn_type in ("rnn", "lstm", "gru"):
             self.image_extractor = ImageFeatureExtractor(
-                encoder=image_encoder, projection_out=hidden_size,
+                encoder=config["image_encoder"], projection_out=["hidden_size"],
             )
         elif self.rnn_type in ("attention"):
             self.image_extractor = ImageFeatureExtractor(
-                encoder=image_encoder,
-                projection_out=hidden_size,
+                encoder=config["image_encoder"],
+                projection_out=config["hidden_size"],
                 pooling=False,
                 convolution_in="infer",
                 projection_in=False,
             )
-        if encoder_init:
-            self.image_extractor.init_weights(encoder_init)
+        if config["encoder_init"]:
+            self.image_extractor.init_weights(config["encoder_init"])
 
-        self.word_embedder = WordEmbedder(wordvec_dim, datamodule.tokenizer)
-        if wd_embedder_init:
-            self.word_embedder.init_weights(wd_embedder_init)
+        self.word_embedder = WordEmbedder(config["wordvec_dim"], self.tokenizer)
+        if config["wd_embedder_init"]:
+            self.word_embedder.init_weights(config["wd_embedder_init"])
 
         self.vocab_size = self.word_embedder.vocab_size
         self.wordvec_dim = self.word_embedder.wordvec_dim
 
-        self._pad = datamodule.tokenizer.padding["pad_id"]
-        self._start = tokens_to_ids(datamodule.tokenizer, [BOS])[BOS]
-        self._end = tokens_to_ids(datamodule.tokenizer, [EOS])[EOS]
+        self._pad = self.tokenizer.padding["pad_id"]
+        self._start = tokens_to_ids(self.tokenizer, [BOS])[BOS]
+        self._end = tokens_to_ids(self.tokenizer, [EOS])[EOS]
 
         self.ignore_index = self._pad
 
-        self.num_rnn_layers = num_rnn_layers
-        self.num_rnn_directions = 2 if rnn_bidirectional else 1
-        self.rnn_dropout = rnn_dropout if rnn_dropout else 0
+        self.num_rnn_layers = config["num_rnn_layers"]
+        self.num_rnn_directions = 2 if config["rnn_bidirectional"] else 1
+        self.rnn_dropout = config["rnn_dropout"] if config["rnn_dropout"] else 0
 
-        self.learning_rate = learning_rate
+        self.learning_rate = config["learning_rate"]
 
         # RNN
-        if rnn_type == "rnn":
+        if config["rnn_type"] == "rnn":
             self.decoder = RNN(
                 input_size=self.wordvec_dim,
-                hidden_size=hidden_size,
-                num_rnns=num_rnns,
-                num_layers=num_rnn_layers,
-                nonlinearity=rnn_nonlinearity,
+                hidden_size=config["hidden_size"],
+                num_rnns=["num_rnns"],
+                num_layers=config["num_rnn_layers"],
+                nonlinearity=config["rnn_nonlinearity"],
                 dropout=self.rnn_dropout,
-                bidirectional=rnn_bidirectional,
+                bidirectional=config["rnn_bidirectional"],
             )
-        elif rnn_type == "gru":
+        elif config["rnn_type"] == "gru":
             self.decoder = GRU(
                 input_size=self.wordvec_dim,
-                hidden_size=hidden_size,
-                num_rnns=num_rnns,
-                num_layers=num_rnn_layers,
-                nonlinearity=rnn_nonlinearity,
+                hidden_size=config["hidden_size"],
+                num_rnns=config["num_rnns"],
+                num_layers=config["num_rnn_layers"],
+                nonlinearity=config["rnn_nonlinearity"],
                 dropout=self.rnn_dropout,
-                bidirectional=rnn_bidirectional,
+                bidirectional=config["rnn_bidirectional"],
             )
-        elif rnn_type == "lstm":
+        elif config["rnn_type"] == "lstm":
             self.decoder = LSTM(
                 input_size=self.wordvec_dim,
-                hidden_size=hidden_size,
-                num_rnns=num_rnns,
-                num_layers=num_rnn_layers,
-                nonlinearity=rnn_nonlinearity,
+                hidden_size=config["hidden_size"],
+                num_rnns=config["num_rnns"],
+                num_layers=config["num_rnn_layers"],
+                nonlinearity=config["rnn_nonlinearity"],
                 dropout=self.rnn_dropout,
-                bidirectional=rnn_bidirectional,
+                bidirectional=config["rnn_bidirectional"],
             )
-        if rnn_type == "attention":
+        if config["rnn_type"] == "attention":
             self.decoder = ParallelAttentionLSTM(
                 input_size=self.wordvec_dim,
-                hidden_size=hidden_size,
-                num_features=hidden_size,
-                num_heads=num_rnn_layers,
+                hidden_size=config["hidden_size"],
+                num_features=config["hidden_size"],
+                num_heads=config["num_rnn_layers"],
                 dropout=self.rnn_dropout,
-                num_rnns=num_rnns,
+                num_rnns=config["num_rnns"],
             )
 
-        if rnn_init:
-            self.decoder.init_weights(rnn_init)
+        if config["rnn_init"]:
+            self.decoder.init_weights(config["rnn_init"])
 
-        self.fc_scorer = ParallelFCScorer(num_rnns, hidden_size, self.vocab_size)
-        if fc_init:
-            self.fc_scorer.init_weights(fc_init)
+        self.fc_scorer = ParallelFCScorer(
+            config["num_rnns"], config["hidden_size"], self.vocab_size
+        )
+        if config["fc_init"]:
+            self.fc_scorer.init_weights(config["fc_init"])
+
+        self.inference_beam_alpha = config["inference_beam_alpha"]
+        self.inference_beam_width = config["inference_beam_width"]
+        self.label_smoothing_epsilon = config["label_smoothing_epsilon"]
+
+        self.save_hyperparameters(config)
 
     def train_dataloader(self):
         return self.datamodule.train_dataloader(self.batch_size)
@@ -152,7 +153,6 @@ class CaptioningRNN(pl.LightningModule):
     def forward(self, batch, n_captions=1, return_attn=False):
         """This is a pl.LightningModule, so `forward` is *not* called
         during training. We use this to define inference logic instead."""
-        max_length = self.datamodule.max_caption_length
         if n_captions > self.decoder.num_rnns:
             raise ValueError("Cannot generate more captions than trained rnns")
         x = batch["image"]
@@ -168,7 +168,9 @@ class CaptioningRNN(pl.LightningModule):
             x = self.image_extractor.convolution(x)  # (N, hidden_size, pixels, pixels)
 
         captions = torch.empty(
-            (batch_size, n_captions, max_length + 1), device=x.device, dtype=torch.long
+            (batch_size, n_captions, self.max_length + 1),
+            device=x.device,
+            dtype=torch.long,
         )
 
         y = torch.tensor([self._start] * batch_size, device=x.device).view(
@@ -198,12 +200,11 @@ class CaptioningRNN(pl.LightningModule):
                     cns=cn,
                     states=states,
                     features=features,
-                    max_length=self.datamodule.max_caption_length,
+                    max_length=self.max_length,
                     which_rnn=i,
-                    alpha=1.0,
-                    beam_width=10,
+                    alpha=self.inference_beam_alpha,
+                    beam_width=self.inference_beam_width,
                 )
-
         if return_attn and self.rnn_type == "attention":
             return captions, attn_weights
         else:
@@ -216,7 +217,6 @@ class CaptioningRNN(pl.LightningModule):
         """
         ### Ingest inputs, shapes ###
         x, y = batch["image"], batch["captions"]
-        batch_size = y.shape[0]
 
         ### Image features to initial hidden state ###
         x = self.image_extractor.encoder(x)  # (N, cnn_out, K, K)
@@ -226,7 +226,7 @@ class CaptioningRNN(pl.LightningModule):
         if self.image_extractor.projector:
             x = x.flatten(start_dim=1)  # (N, cnn_out)
             x = self.image_extractor.projector(x)  # (N, hidden_size)
-        if self.image_extractor.convolution:
+        elif self.image_extractor.convolution:
             x = self.image_extractor.convolution(x)  # (N, hidden_size, K, K)
 
         ### Offset captions for teacher forcing ###
@@ -251,7 +251,10 @@ class CaptioningRNN(pl.LightningModule):
         y_out = y_out[:, : self.decoder.num_rnns, :]
 
         loss = multi_caption_smoothing_temporal_softmax_loss(
-            scores, y_out, ignore_index=self.ignore_index
+            scores,
+            y_out,
+            ignore_index=self.ignore_index,
+            epsilon=self.label_smoothing_epsilon,
         )
         return loss
 
@@ -271,9 +274,7 @@ class CaptioningRNN(pl.LightningModule):
             preds = preds[:5, :, :]
             ground_truth = batch["captions"][:5]
             captions = ground_truth[:, : preds.shape[1], :]
-            examples = log_wandb_preds(
-                self.datamodule.tokenizer, images, preds, captions
-            )
+            examples = log_wandb_preds(self.tokenizer, images, preds, captions)
             wandb.log({"val_examples": examples}, commit=False)
         self.log("val_loss", loss, on_step=True)
         self.log("val_bleu_score", self.val_bleu, on_step=False, on_epoch=True)
@@ -297,3 +298,26 @@ class CaptioningRNN(pl.LightningModule):
             "monitor": "val_loss",
         }
 
+    @classmethod
+    def default_config(cls):
+        return {
+            "max_length": 25,
+            "batch_size": 64,
+            "wordvec_dim": 768,
+            "hidden_size": 576,
+            "wd_embedder_init": "xavier",
+            "image_encoder": "resnext50",
+            "encoder_init": "xavier",
+            "rnn_type": "attention",
+            "num_rnns": 1,
+            "num_rnn_layers": 3,
+            "rnn_nonlinearity": None,
+            "rnn_init": None,
+            "rnn_dropout": 0.1,
+            "rnn_bidirectional": False,
+            "fc_init": "xavier",
+            "learning_rate": 3e-4,
+            "label_smoothing_epsilon": 0.05,
+            "inference_beam_width": 15,
+            "inference_beam_alpha": 1.1,
+        }
