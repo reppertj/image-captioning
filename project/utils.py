@@ -14,10 +14,10 @@ from project.datasets import NormalizeInverse, ids_to_captions
 inv_normalize = NormalizeInverse()
 
 
-def sample_predictions(minibatch, model, n_captions="max", skip_special_tokens=False):
+def sample_predictions(minibatch, model, skip_special_tokens=False, n_captions="max"):
     if n_captions == "max":
         n_captions = model.decoder.num_rnns
-    tokenizer = model.datamodule.tokenizer
+    tokenizer = model.tokenizer
     model.eval()
     with torch.no_grad():
         pred_captions = model.forward(minibatch, n_captions=n_captions)
