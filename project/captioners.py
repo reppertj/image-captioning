@@ -1,11 +1,9 @@
 from typing import Dict, Union
 from pytorch_lightning.core.datamodule import LightningDataModule
-from project.simple_tokenizer import WordTokenizer
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 import wandb
-from torch import nn
 
 from project.datasets import tokens_to_ids, BOS, EOS, UNK, PAD
 from project.decoders import GRU, LSTM, RNN, ParallelAttentionLSTM, ParallelFCScorer
@@ -138,6 +136,10 @@ class CaptioningRNN(pl.LightningModule):
         self.inference_beam_alpha = config["inference_beam_alpha"]
         self.inference_beam_width = config["inference_beam_width"]
         self.label_smoothing_epsilon = config["label_smoothing_epsilon"]
+
+        self.optimizer = config["optimizer"]
+        self.scheduler = config["scheduler"]
+        self.momentum = config["momentum"]
 
         self.save_hyperparameters(config)
 
@@ -288,36 +290,51 @@ class CaptioningRNN(pl.LightningModule):
         self.log("test_bleu_score", self.test_bleu, on_step=False, on_epoch=True)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, patience=5, min_lr=1e-6
-        )
-        return {
-            "optimizer": optimizer,
-            "scheduler": scheduler,
-            "monitor": "val_loss",
-        }
+        if self.optimizer == "adam":
+            optimizer = torch.optim.Adam(
+                self.parameters(), betas=(self.momentum, 0.999), lr=self.learning_rate
+            )
+        else:
+            optimizer = torch.optim.SGD(
+                self.parameters(), lr=self.learning_rate, momentum=self.momentum
+            )
+        if self.scheduler:
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, patience=5, min_lr=1e-6
+            )
+            return {
+                "optimizer": optimizer,
+                "scheduler": scheduler,
+                "monitor": "val_loss",
+            }
+        else:
+            return {
+                "optimzer": optimizer,
+            }
 
     @classmethod
     def default_config(cls):
         return {
-            "max_length": 25,
-            "batch_size": 64,
-            "wordvec_dim": 768,
-            "hidden_size": 576,
-            "wd_embedder_init": "xavier",
-            "image_encoder": "resnext50",
-            "encoder_init": "xavier",
-            "rnn_type": "attention",
-            "num_rnns": 1,
-            "num_rnn_layers": 3,
-            "rnn_nonlinearity": None,
-            "rnn_init": None,
-            "rnn_dropout": 0.1,
+            "max_length": 25,  # int - max caption length
+            "batch_size": 64,  # int
+            "wordvec_dim": 768,  # int - size of word embedding
+            "hidden_size": 576,  # int - for attention, ensure hidden_size % num_rnn_layers == 0
+            "wd_embedder_init": "xavier",  # or "kaiming"
+            "image_encoder": "resnext50",  # or "resnet50", "resnet101", "resnet152", "mobilenetv2", "vgg16"
+            "encoder_init": "xavier",  # or "kaiming"
+            "rnn_type": "attention",  # or "rnn", "lstm", "gru"
+            "num_rnns": 1,  # int - train up to 5 captioners in parallel
+            "num_rnn_layers": 3,  # int - for attention, ensure hidden_size % num_rnn_layers == 0
+            "rnn_nonlinearity": None,  # or "relu"
+            "rnn_init": None,  # or "xavier", "kaiming"
+            "rnn_dropout": 0.1,  # float or False
             "rnn_bidirectional": False,
-            "fc_init": "xavier",
-            "learning_rate": 3e-4,
-            "label_smoothing_epsilon": 0.05,
-            "inference_beam_width": 15,
-            "inference_beam_alpha": 1.1,
+            "fc_init": "xavier",  # or "kaiming", None
+            "label_smoothing_epsilon": 0.05,  # float - 0. to turn off label smoothing
+            "inference_beam_width": 15,  # int - 1 to turn off beam search
+            "inference_beam_alpha": 1.0,  # float - higher numbers favor shorter captions
+            "learning_rate": 3e-4,  # float; also configurable in trainer
+            "optimizer": "adam",  # or "sgd"; also configurable in trainer
+            "scheduler": "plateau",  # or None; also configurable in trainer
+            "momentum": 0.9,  # also configurable in trainer
         }
