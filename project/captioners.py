@@ -1,23 +1,15 @@
+import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 import wandb
 from torch import nn
-import torch.nn.functional as F
-import pytorch_lightning as pl
-from project.feature_extraction import ImageFeatureExtractor, WordEmbedder
-from project.datasets import tokens_to_ids
-from project.decoders import RNN, GRU, LSTM, ParallelAttentionLSTM, ParallelFCScorer
-from project.loss import (
-    multi_caption_temporal_softmax_loss,
-    temporal_softmax_loss,
-    multi_caption_smoothing_temporal_softmax_loss,
-)
-from project.metrics import CorpusBleu
-from project.utils import log_wandb_preds, batch_beam_search
 
-BOS = "[CLS]"
-EOS = "[SEP]"
-UNK = "[UNK]"
-PAD = "[PAD]"
+from project.datasets import tokens_to_ids, BOS, EOS, UNK, PAD
+from project.decoders import GRU, LSTM, RNN, ParallelAttentionLSTM, ParallelFCScorer
+from project.feature_extraction import ImageFeatureExtractor, WordEmbedder
+from project.loss import multi_caption_smoothing_temporal_softmax_loss
+from project.metrics import CorpusBleu
+from project.utils import batch_beam_search, log_wandb_preds
 
 
 class CaptioningRNN(pl.LightningModule):
@@ -282,9 +274,7 @@ class CaptioningRNN(pl.LightningModule):
             examples = log_wandb_preds(
                 self.datamodule.tokenizer, images, preds, captions
             )
-            wandb.log(
-                {"val_examples": examples}, commit=False
-            )
+            wandb.log({"val_examples": examples}, commit=False)
         self.log("val_loss", loss, on_step=True)
         self.log("val_bleu_score", self.val_bleu, on_step=False, on_epoch=True)
 
