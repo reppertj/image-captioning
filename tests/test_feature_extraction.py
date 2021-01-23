@@ -1,6 +1,6 @@
 import pandas as pd
 import torch
-from project.datasets import train_tokenizer_from_df
+from project.datasets import train_tokenizer_from_df, PAD, BOS, EOS, UNK
 from project.feature_extraction import (
     ImageFeatureExtractor,
     WordEmbedder,
@@ -36,11 +36,6 @@ df = pd.DataFrame(
         ],
     }
 )
-
-BOS = "[CLS]"
-EOS = "[SEP]"
-UNK = "[UNK]"
-PAD = "[PAD]"
 
 image_batch = torch.randn((16, 3, 224, 224), device=device)
 caption_batch = torch.randint(1000, (16, 5, 30), device=device)
