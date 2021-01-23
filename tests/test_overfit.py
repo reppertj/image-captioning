@@ -1,56 +1,67 @@
 import os
-from project.metrics import CorpusBleu
-
-from torch.utils import data
-from project.datasets import CombinedDataModule
-from project.captioners import CaptioningRNN
-from pytest import mark
 from unittest.mock import MagicMock
-import torch
-from pytorch_lightning import Trainer, seed_everything
-import pytorch_lightning as pl
-import wandb
 
+import torch
+import wandb
+from project.captioners import CaptioningRNN
+from project.datasets import CombinedDataModule
+from project.metrics import CorpusBleu
+from pytest import mark
+from pytorch_lightning import Trainer, seed_everything
 
 """
 In real life, we would have many more tests. An overfitting test, however, is a great
 way to sanity check an end-to-end machine learning training pipeline. We should be
-able to overfit a single training set.  To simulate the full program as much as possible, this requires the presence of a "mini" version of the Flickr30K and COCO datasets.
+able to overfit a single training set.
 """
 
+
+@mark.slow
 def test_captioner_overfit():
     seed_everything(42)
-    
+
     wandb.run = MagicMock()
     wandb.run.__lt__.return_value = True
-    wandb_logger = pl.loggers.WandbLogger(project='project')
-    wandb_logger._experiment = MagicMock()
-    wandb_logger._experiment.__call__ = MagicMock(return_value=True)
 
     datamodule = CombinedDataModule(
-        flickr_csv=os.path.join('tests', 'test_data', 'test_flickr.csv'),
-        flickr_dir=os.path.join('tests', 'test_data', 'test_flickr_images'),
+        flickr_csv=os.path.join("tests", "test_data", "test_flickr.csv"),
+        flickr_dir=os.path.join("tests", "test_data", "test_flickr_images"),
         batch_size=4,
         val_size=4,
         test_size=4,
-        transform='normalize',
-        target_transform='tokenize',
+        transform="normalize",
+        target_transform="tokenize",
         dev_set=12,
         num_workers=0,
     )
-    
-    model = CaptioningRNN(datamodule, rnn_type='attention', batch_size=4, num_rnns=1, rnn_dropout=False)
-    
-    trainer = Trainer(max_epochs=200, num_sanity_val_steps=0, log_every_n_steps=250, check_val_every_n_epoch=250, logger=wandb_logger)
+
+    datamodule.setup()
+
+    config = CaptioningRNN.default_config()
+
+    config["rnn_dropout"] = False
+    config["label_smoothing_epsilon"] = 0.0
+    config["inference_beam_width"] = 1
+    config["inference_beam_alpha"] = 0.0
+
+    model = CaptioningRNN(datamodule, config)
+
+    trainer = Trainer(
+        max_epochs=150,
+        num_sanity_val_steps=0,
+        log_every_n_steps=250,
+        check_val_every_n_epoch=250,
+    )
     trainer.fit(model)
+
+    assert trainer.logged_metrics["train_loss"] < 0.1
 
     batch = next(iter(model.datamodule.train_dataloader()))
     with torch.no_grad():
         model.eval()
         preds = model(batch)
-        
-    bleu = CorpusBleu(model.datamodule.tokenizer)
-    
-    bleu_score = bleu(preds.squeeze(), batch['captions'])
-    print(bleu_score)
-    assert bleu_score > 0.7
+
+    bleu = CorpusBleu(model.tokenizer)
+
+    bleu_score = bleu(preds.squeeze(), batch["captions"])
+    assert bleu_score > 0.99
