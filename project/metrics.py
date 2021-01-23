@@ -1,3 +1,4 @@
+from functools import reduce
 import torch
 from nltk.translate.bleu_score import corpus_bleu as _corpus_bleu, SmoothingFunction
 from project.datasets import ids_to_captions
@@ -6,7 +7,7 @@ from pytorch_lightning.metrics import Metric
 smoothie = SmoothingFunction().method4
 
 def _corpus_bleu_score(
-    preds: torch.Tensor, gt: torch.Tensor, tokenizer, weights=(0.25, 0.25, 0.25, 0.25)
+    preds: torch.Tensor, gts: torch.Tensor, tokenizer, weights=(0.25, 0.25, 0.25, 0.25)
 ):
     """ Returns (possibly weighted) average of 1, 2, 3, and 4-gram corpus BLEU scores
     for a batch of predictions and ground truths. The tokenizer is 
@@ -19,18 +20,28 @@ def _corpus_bleu_score(
         tokenizer {tokenizer}
         weights {sequence} -- weights for 1, 2, 3, 4-gram scores
     """
+    total_preds = preds.shape[0]
     preds = [
         s.strip().split(" ")
         for s in ids_to_captions(preds, tokenizer, skip_special_tokens=True)
     ]
-    gt = [
+    gts = [
         [
             s.strip().split(" ")
             for s in ids_to_captions(lst, tokenizer, skip_special_tokens=True)
         ]
-        for lst in gt
+        for lst in gts
     ]
-    return _corpus_bleu(gt, preds, weights=weights, smoothing_function=smoothie)
+    new_preds, new_gts = [], []
+    num_too_short = 0
+    for i, pred in enumerate(preds):
+        if len(pred) < 2:
+            num_too_short += 1
+        else:
+            new_preds.append(pred)
+            new_gts.append(gts[i])
+    score = _corpus_bleu(new_gts, new_preds, weights=weights, smoothing_function=smoothie)
+    return (score * (total_preds - num_too_short)) / total_preds
 
 
 class CorpusBleu(Metric):
