@@ -1,16 +1,23 @@
+import os
 from typing import Dict, Union
-from pytorch_lightning.core.datamodule import LightningDataModule
+
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-import wandb
+from pytorch_lightning.core.datamodule import LightningDataModule
 
-from project.datasets import tokens_to_ids, BOS, EOS, UNK, PAD
-from project.decoders import GRU, LSTM, RNN, ParallelAttentionLSTM, ParallelFCScorer
+from project.datasets import BOS, EOS, PAD, UNK, tokens_to_ids
+from project.decoders import (GRU, LSTM, RNN, ParallelAttentionLSTM,
+                              ParallelFCScorer)
 from project.feature_extraction import ImageFeatureExtractor, WordEmbedder
 from project.loss import multi_caption_smoothing_temporal_softmax_loss
 from project.metrics import CorpusBleu
 from project.utils import batch_beam_search, log_wandb_preds
+
+USING_WANDB = True if os.environ.get("WANDB_PROJECT") else False
+
+if USING_WANDB:
+    import wandb
 
 
 class CaptioningRNN(pl.LightningModule):
@@ -18,7 +25,7 @@ class CaptioningRNN(pl.LightningModule):
         self, datamodule: LightningDataModule, config: Union[Dict, None] = None,
     ):
         """
-        
+        See the readme for configuration and usage details! 
         """
         super().__init__()
 
@@ -270,7 +277,7 @@ class CaptioningRNN(pl.LightningModule):
         preds = self.forward(batch, n_captions=self.decoder.num_rnns)
         for i in range(self.decoder.num_rnns):
             self.val_bleu(preds[:, i, :], batch["captions"])
-        if batch_idx % 100 == 0:
+        if USING_WANDB and batch_idx % 100 == 0:
             #  Periodically log minibatch of predictions with their images
             images = batch["image"][:5]
             preds = preds[:5, :, :]
