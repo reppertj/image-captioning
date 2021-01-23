@@ -11,6 +11,7 @@ from project.loss import (
     temporal_softmax_loss,
     multi_caption_smoothing_temporal_softmax_loss,
 )
+from project.metrics import CorpusBleu
 from project.utils import log_wandb_preds, batch_beam_search
 
 BOS = "[CLS]"
@@ -47,6 +48,8 @@ class CaptioningRNN(pl.LightningModule):
         self.batch_size = batch_size
         self.datamodule = datamodule
         self.datamodule.setup()
+        self.val_bleu = CorpusBleu(self.datamodule.tokenizer)
+        self.test_bleu = CorpusBleu(self.datamodule.tokenizer)
 
         if isinstance(image_encoder, str) and image_encoder not in {
             "resnet50",
@@ -164,14 +167,13 @@ class CaptioningRNN(pl.LightningModule):
         batch_size = x.shape[0]
         x = self.image_extractor.encoder(x)  # (N, cnn_out, K, K)
         if self.image_extractor.pooling:
-            x = self.image_extractor.pooling(x)  #  (N, cnn_out, 1, 1)
+            x = self.image_extractor.pooling(x)  # (N, cnn_out, 1, 1)
         x = F.normalize(x, p=2, dim=1)  # L2 normalize image features
         if self.image_extractor.projector:
             x = x.view(batch_size, -1)  # (N, cnn_out)
             x = self.image_extractor.projector(x)  # (N, hidden_size)
         if self.image_extractor.convolution:
             x = self.image_extractor.convolution(x)  # (N, hidden_size, pixels, pixels)
-            pixels = x.shape[-1]
 
         captions = torch.empty(
             (batch_size, n_captions, max_length + 1), device=x.device, dtype=torch.long
@@ -227,7 +229,7 @@ class CaptioningRNN(pl.LightningModule):
         ### Image features to initial hidden state ###
         x = self.image_extractor.encoder(x)  # (N, cnn_out, K, K)
         if self.image_extractor.pooling:
-            x = self.image_extractor.pooling(x)  #  (N, cnn_out, 1, 1)
+            x = self.image_extractor.pooling(x)  # (N, cnn_out, 1, 1)
         x = F.normalize(x, p=2, dim=1)  # L2 normalize image features
         if self.image_extractor.projector:
             x = x.flatten(start_dim=1)  # (N, cnn_out)
@@ -268,23 +270,31 @@ class CaptioningRNN(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         loss = self.forward_step(batch, batch_idx)
+        preds = self.forward(batch, n_captions=self.decoder.num_rnns)
+        for i in range(self.decoder.num_rnns):
+            self.val_bleu(preds[:, i, :], batch["captions"])
         if batch_idx % 100 == 0:
+            #  Periodically log minibatch of predictions with their images
             images = batch["image"][:5]
+            preds = preds[:5, :, :]
             ground_truth = batch["captions"][:5]
-            batch = {"image": images, "captions": ground_truth}
-            preds = self.forward(batch)
             captions = ground_truth[:, : preds.shape[1], :]
             examples = log_wandb_preds(
                 self.datamodule.tokenizer, images, preds, captions
             )
             wandb.log(
-                {"val_examples": examples, "val_loss": loss.cpu(),}
+                {"val_examples": examples}, commit=False
             )
         self.log("val_loss", loss, on_step=True)
+        self.log("val_bleu_score", self.val_bleu, on_step=False, on_epoch=True)
 
     def test_step(self, batch, batch_idx):
         loss = self.forward_step(batch, batch_idx)
+        preds = self.forward(batch, n_captions=self.decoder.num_rnns)
+        for i in range(self.decoder.num_rnns):
+            self.test_bleu(preds[:, i, :], batch["captions"])
         self.log("test_loss", loss, on_step=True)
+        self.log("test_bleu_score", self.test_bleu, on_step=False, on_epoch=True)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
