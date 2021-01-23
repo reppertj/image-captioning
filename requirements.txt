@@ -1,3 +1,13 @@
-pytorch-lightning >= 1.0.0rc2
+pytorch_lightning >= 1.0.0rc2
 torch >= 1.3.0
 torchvision >= 0.6.0
+nltk
+pandas
+wandb
+numpy
+torchvision
+matplotlib
+PIL
+sklearn
+tokenizers
+pyarrow==0.17.1
