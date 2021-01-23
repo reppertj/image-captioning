@@ -1,89 +1,70 @@
-### Deep learning project seed
-Use this seed to start new deep learning / ML projects.
+<div align="center">
 
-- Built in setup.py
-- Built in requirements
-- Examples with MNIST
-- Badges
-- Bibtex
+### Image Captioning in Pytorch
 
-#### Goals  
-The goal of this seed is to structure ML paper-code the same so that work can easily be extended and replicated.   
-
-### DELETE EVERYTHING ABOVE FOR YOUR PROJECT  
- 
----
-
-<div align="center">    
- 
-# Your Project Name     
-
-[![Paper](http://img.shields.io/badge/paper-arxiv.1001.2234-B31B1B.svg)](https://www.nature.com/articles/nature14539)
-[![Conference](http://img.shields.io/badge/NeurIPS-2019-4b44ce.svg)](https://papers.nips.cc/book/advances-in-neural-information-processing-systems-31-2018)
-[![Conference](http://img.shields.io/badge/ICLR-2019-4b44ce.svg)](https://papers.nips.cc/book/advances-in-neural-information-processing-systems-31-2018)
-[![Conference](http://img.shields.io/badge/AnyConference-year-4b44ce.svg)](https://papers.nips.cc/book/advances-in-neural-information-processing-systems-31-2018)  
-<!--
-ARXIV   
-[![Paper](http://img.shields.io/badge/arxiv-math.co:1480.1111-B31B1B.svg)](https://www.nature.com/articles/nature14539)
--->
 ![CI testing](https://github.com/PyTorchLightning/deep-learning-project-template/workflows/CI%20testing/badge.svg?branch=master&event=push)
 
-
-<!--  
-Conference   
--->   
 </div>
- 
-## Description   
-What it does   
 
-## How to run   
-First, install dependencies   
+## Description
+
+This is a *work in progress*! Expect things to change drastically.
+
+This project is a framework for experimenting with decoder-encoder image captioning models using Pytorch and Pytorch Lightning. Although it is a toy implementation for educational purposes, it includes several elements not found in some other image captioning explainers, including customizable preprocessing and augmentation, label smoothing, and beam search. It also includes a notebook with two different methods for introspecting into the performance of the model, first through capturing the attention weights used in the multihead attention mechanism, and second by approximating the Shapley values by permuting feature inputs through the encoder. The second method is model agnostic, so it can be used with models that do not feature an attention mechanism.
+
+## How to run
+
+First, install dependencies
+
 ```bash
 # clone project   
-git clone https://github.com/YourGithubName/deep-learning-project-template
+git clone https://github.com/reppertj/image-captioning
 
 # install project   
-cd deep-learning-project-template 
+cd image-captioning
 pip install -e .   
 pip install -r requirements.txt
- ```   
- Next, navigate to any file and run it.   
- ```bash
-# module folder
+
+# project folder
 cd project
 
-# run module (example: mnist as your main contribution)   
-python lit_classifier_main.py    
+# run training
+python captioner.py    
 ```
 
 ## Imports
-This project is setup as a package which means you can now easily import any file into any other file like so:
+
+This project is setup as a package, which means you can easily import any file into any other file like so:
+
+Train on the COCO and or Flickr30k datasets:
+
+- Flickr30k from [kaggle](https://www.kaggle.com/hsankesara/flickr-image-dataset)
+- COCO [images](http://images.cocodataset.org/zips/train2014.zip) and [annotations](http://images.cocodataset.org/annotations/annotations_trainval2014.zip)
+
 ```python
-from project.datasets.mnist import mnist
-from project.lit_classifier_main import LitClassifier
+from project.datasets import CombinedDataModule
+from project.captioners import CaptioningRNN
 from pytorch_lightning import Trainer
 
-# model
-model = LitClassifier()
+# data (train on coco, flickr30k, or both!)
+dataset = CombinedDataModule(
+    coco_json="coco_labels/annotations/captions_train2014.json",
+    coco_dir="coco2014_train/train2014",
+    flickr_csv="flickr30k_images/results.csv",
+    flickr_dir="flickr30k_images/flickr30k_images",
+)
 
-# data
-train, val, test = mnist()
+# model
+model = CaptioningRNN(dataset)
 
 # train
 trainer = Trainer()
-trainer.fit(model, train, val)
+trainer.fit(model)
 
 # test using the best model!
-trainer.test(test_dataloaders=test)
+trainer.test()
 ```
 
-### Citation   
-```
-@article{YourName,
-  title={Your Title},
-  author={Your team},
-  journal={Location},
-  year={Year}
-}
-```   
+## Notebooks
+
+In progress.
