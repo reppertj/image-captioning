@@ -14,7 +14,7 @@ from project.datasets import NormalizeInverse, ids_to_captions
 inv_normalize = NormalizeInverse()
 
 
-def sample_predictions(minibatch, model, n_captions="max", remove_special_tokens=False):
+def sample_predictions(minibatch, model, n_captions="max", skip_special_tokens=False):
     if n_captions == "max":
         n_captions = model.decoder.num_rnns
     tokenizer = model.datamodule.tokenizer
@@ -27,10 +27,10 @@ def sample_predictions(minibatch, model, n_captions="max", remove_special_tokens
             plt.imshow(images[i].permute(1, 2, 0).clip(0, 1).cpu())
             plt.axis("off")
             gt_str = "\n".join(
-                ids_to_captions(ground_truth[i], tokenizer, remove_special_tokens)
+                ids_to_captions(ground_truth[i], tokenizer, skip_special_tokens)
             )
             pred_str = "\n".join(
-                ids_to_captions(pred_captions[i], tokenizer, remove_special_tokens)
+                ids_to_captions(pred_captions[i], tokenizer, skip_special_tokens)
             )
             plt.title(f"Ground truth: {gt_str}\nPrediction: {pred_str}")
             plt.show()
@@ -39,10 +39,9 @@ def sample_predictions(minibatch, model, n_captions="max", remove_special_tokens
 def log_wandb_preds(tokenizer, images, preds, ground_truth):
     """
     images: Tensor of (N, C, H, W)
-    preds: Tensor of (N, M, T, L)
-    ground_truth: Tensor of (N, M, T, L)
-    Where N is batch_size, M is the number of captions, T is caption length,
-    and L is words.
+    preds: Tensor of (N, M, T)
+    ground_truth: Tensor of (N, M, T)
+    Where N is batch_size, M is the number of captions, and T is caption length
 
     Returns list of wandb.Image objects that can be sent to logger
     """
@@ -51,12 +50,12 @@ def log_wandb_preds(tokenizer, images, preds, ground_truth):
     for i in range(preds.shape[0]):
         image = to_PIL(inv_normalize(images[i].cpu()))
         gt_str = ", ".join(
-            ids_to_captions(ground_truth[i], tokenizer, remove_special_tokens=True)
+            ids_to_captions(ground_truth[i], tokenizer, skip_special_tokens=True)
         )
         pred_str = ", ".join(
-            ids_to_captions(preds[i], tokenizer, remove_special_tokens=True)
+            ids_to_captions(preds[i], tokenizer, skip_special_tokens=True)
         )
-        caption = f"TRUE: {gt_str}; PRED: {pred_str}"
+        caption = f"TRUE: {gt_str} PRED: {pred_str}"
         to_log.append(wandb.Image(image, caption=caption))
     return to_log
 
@@ -245,3 +244,4 @@ def get_new_candidates(
             ),
         )
     return ret
+
