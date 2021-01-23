@@ -14,17 +14,17 @@ def trained_word_tokenizer(tmpdir):
     with open(filename, "w") as f:
         f.writelines(input)
     wt = WordTokenizer()
-    wt.train(filename, 30, 1, ["[PAD]", "[BOS]", "[EOS]", "[UNK]"], None, None)
+    wt.train(filename, 30, 1, ["[pad]", "[bos]", "[eos]", "[unk]"], None, None)
     return wt
 
 
 def test_simple_tokenizer(trained_word_tokenizer):
     wt = trained_word_tokenizer
 
-    assert wt.token_to_id("[PAD]") == 0
-    assert wt.token_to_id("[BOS]") == 1
-    assert wt.token_to_id("[EOS]") == 2
-    assert wt.token_to_id("[UNK]") == 3
+    assert wt.token_to_id("[pad]") == 0
+    assert wt.token_to_id("[bos]") == 1
+    assert wt.token_to_id("[eos]") == 2
+    assert wt.token_to_id("[unk]") == 3
 
     assert wt.vocab_size == 22
 
@@ -81,3 +81,17 @@ def test_simple_tokenizer_save_load(tmpdir, trained_word_tokenizer):
     encoded = wt.encode_batch(["sample sentence to encode"])
     encoded2 = wt2.encode_batch(["sample sentence to encode"])
     assert encoded == encoded2
+    
+def test_simple_tokenizer_from_config(trained_word_tokenizer):
+    wt = trained_word_tokenizer
+    wt.enable_truncation(10)
+    wt.enable_padding()
+    
+    wt_config = wt.config
+    
+    wt2 = WordTokenizer()
+    wt2.load_config(wt_config)
+    
+    assert wt.tokens == wt2.tokens
+    assert wt.padding == wt2.padding
+    assert wt.vocab_size == wt2.vocab_size
