@@ -626,7 +626,7 @@ class CombinedDataModule(pl.LightningDataModule):
         return DataLoader(
             self.val,
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=False,
             drop_last=True,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
