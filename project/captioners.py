@@ -4,20 +4,15 @@ from typing import Dict, Union
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+import wandb
 from pytorch_lightning.core.datamodule import LightningDataModule
 
 from project.datasets import BOS, EOS, PAD, UNK, tokens_to_ids
-from project.decoders import (GRU, LSTM, RNN, ParallelAttentionLSTM,
-                              ParallelFCScorer)
+from project.decoders import GRU, LSTM, RNN, ParallelAttentionLSTM, ParallelFCScorer
 from project.feature_extraction import ImageFeatureExtractor, WordEmbedder
 from project.loss import multi_caption_smoothing_temporal_softmax_loss
 from project.metrics import CorpusBleu
 from project.utils import batch_beam_search, log_wandb_preds
-
-USING_WANDB = True if os.environ.get("WANDB_PROJECT") else False
-
-if USING_WANDB:
-    import wandb
 
 
 class CaptioningRNN(pl.LightningModule):
@@ -236,7 +231,8 @@ class CaptioningRNN(pl.LightningModule):
             x = x.flatten(start_dim=1)  # (N, cnn_out)
             x = self.image_extractor.projector(x)  # (N, hidden_size)
         elif self.image_extractor.convolution:
-            x = self.image_extractor.convolution(x)  # (N, hidden_size, K, K)
+            x = self.image_extractor.convolution(x)  # (N, hidden_size, K, K)        
+        x = self.image_extractor.relu_out(x)
 
         ### Offset captions for teacher forcing ###
         y_in, y_out = y[:, :, :-1], y[:, :, 1:]
@@ -277,7 +273,7 @@ class CaptioningRNN(pl.LightningModule):
         preds = self.forward(batch, n_captions=self.decoder.num_rnns)
         for i in range(self.decoder.num_rnns):
             self.val_bleu(preds[:, i, :], batch["captions"])
-        if USING_WANDB and batch_idx % 100 == 0:
+        if batch_idx % 100 == 0:
             #  Periodically log minibatch of predictions with their images
             images = batch["image"][:5]
             preds = preds[:5, :, :]
@@ -286,7 +282,7 @@ class CaptioningRNN(pl.LightningModule):
             examples = log_wandb_preds(self.tokenizer, images, preds, captions)
             wandb.log({"val_examples": examples}, commit=False)
         self.log("val_loss", loss, on_step=True)
-        self.log("val_bleu_score", self.val_bleu, on_step=False, on_epoch=True)
+        self.log("val_bleu_score", self.val_bleu, on_step=True)
 
     def test_step(self, batch, batch_idx):
         loss = self.forward_step(batch, batch_idx)
@@ -294,7 +290,7 @@ class CaptioningRNN(pl.LightningModule):
         for i in range(self.decoder.num_rnns):
             self.test_bleu(preds[:, i, :], batch["captions"])
         self.log("test_loss", loss, on_step=True)
-        self.log("test_bleu_score", self.test_bleu, on_step=False, on_epoch=True)
+        self.log("test_bleu_score", self.test_bleu, on_step=True)
 
     def configure_optimizers(self):
         if self.optimizer == "adam":
@@ -338,10 +334,10 @@ class CaptioningRNN(pl.LightningModule):
             "rnn_bidirectional": False,
             "fc_init": "xavier",  # or "kaiming", None
             "label_smoothing_epsilon": 0.05,  # float - 0. to turn off label smoothing
-            "inference_beam_width": 15,  # int - 1 to turn off beam search
+            "inference_beam_width": 10,  # int - 1 to turn off beam search
             "inference_beam_alpha": 1.0,  # float - higher numbers favor shorter captions
             "learning_rate": 3e-4,  # float; also configurable in trainer
             "optimizer": "adam",  # or "sgd"; also configurable in trainer
             "scheduler": "plateau",  # or None; also configurable in trainer
-            "momentum": 0.9,  # also configurable in trainer
+            "momentum": 0.9,  # float; also configurable in trainer
         }
