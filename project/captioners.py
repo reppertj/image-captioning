@@ -270,19 +270,15 @@ class CaptioningRNN(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         loss = self.forward_step(batch, batch_idx)
-        preds = self.forward(batch, n_captions=self.decoder.num_rnns)
-        for i in range(self.decoder.num_rnns):
-            self.val_bleu(preds[:, i, :], batch["captions"])
         if batch_idx % 100 == 0:
             #  Periodically log minibatch of predictions with their images
             images = batch["image"][:5]
-            preds = preds[:5, :, :]
+            preds = self.forward(batch)[:5]
             ground_truth = batch["captions"][:5]
             captions = ground_truth[:, : preds.shape[1], :]
             examples = log_wandb_preds(self.tokenizer, images, preds, captions)
             wandb.log({"val_examples": examples}, commit=False)
-        self.log("val_loss", loss, on_step=True)
-        self.log("val_bleu_score", self.val_bleu, on_step=True)
+        self.log("val_loss", loss)
 
     def test_step(self, batch, batch_idx):
         loss = self.forward_step(batch, batch_idx)
