@@ -7,7 +7,7 @@ wandb
 numpy
 torchvision
 matplotlib
-PIL
+Pillow
 sklearn
 tokenizers
 pyarrow==0.17.1
