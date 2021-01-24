@@ -150,6 +150,7 @@ class ImageFeatureExtractor(nn.Module):
             self.convolution = None
         self.projection_in = projection_in
         self.projection_out = projection_out
+        self.relu_out = nn.ReLU()
 
     def init_weights(self, method="kaiming"):
         """ Initialize weights/biases in convolution and projector layers """
