@@ -8,7 +8,8 @@ import wandb
 from pytorch_lightning.core.datamodule import LightningDataModule
 
 from project.datasets import BOS, EOS, PAD, UNK, tokens_to_ids
-from project.decoders import GRU, LSTM, RNN, ParallelAttentionLSTM, ParallelFCScorer
+from project.decoders import (GRU, LSTM, RNN, ParallelAttentionLSTM,
+                              ParallelFCScorer)
 from project.feature_extraction import ImageFeatureExtractor, WordEmbedder
 from project.loss import multi_caption_smoothing_temporal_softmax_loss
 from project.metrics import CorpusBleu
@@ -159,6 +160,8 @@ class CaptioningRNN(pl.LightningModule):
         during training. We use this to define inference logic instead."""
         if n_captions > self.decoder.num_rnns:
             raise ValueError("Cannot generate more captions than trained rnns")
+        if return_attn and self.rnn_type != 'attention':
+            raise ValueError("Attention weights can only be returned for attention networks")
         x = batch["image"]
         batch_size = x.shape[0]
         x = self.image_extractor.encoder(x)  # (N, cnn_out, K, K)
@@ -170,12 +173,15 @@ class CaptioningRNN(pl.LightningModule):
             x = self.image_extractor.projector(x)  # (N, hidden_size)
         if self.image_extractor.convolution:
             x = self.image_extractor.convolution(x)  # (N, hidden_size, pixels, pixels)
-
+        
         captions = torch.empty(
             (batch_size, n_captions, self.max_length + 1),
             device=x.device,
             dtype=torch.long,
         )
+        
+        if return_attn:
+            attn_weights = torch.empty(batch_size, self.decoder.num_rnns, self.max_length, x.shape[-1], x.shape[-1])
 
         y = torch.tensor([self._start] * batch_size, device=x.device).view(
             batch_size, -1
@@ -197,7 +203,7 @@ class CaptioningRNN(pl.LightningModule):
                     features = x
                 if self.rnn_type == "lstm":
                     states = (hn, torch.zeros_like(hn))
-                captions[:, i, :] = batch_beam_search(
+                returned = batch_beam_search(
                     rnn_captioner=self,
                     yns=yn,
                     hns=hn,
@@ -208,8 +214,13 @@ class CaptioningRNN(pl.LightningModule):
                     which_rnn=i,
                     alpha=self.inference_beam_alpha,
                     beam_width=self.inference_beam_width,
+                    need_weights=return_attn
                 )
-        if return_attn and self.rnn_type == "attention":
+                if return_attn:
+                    captions[:, i, :], attn_weights[:, i, :, :] = returned
+                else:
+                    captions[:, i, :] = returned
+        if return_attn:
             return captions, attn_weights
         else:
             return captions
@@ -231,8 +242,7 @@ class CaptioningRNN(pl.LightningModule):
             x = x.flatten(start_dim=1)  # (N, cnn_out)
             x = self.image_extractor.projector(x)  # (N, hidden_size)
         elif self.image_extractor.convolution:
-            x = self.image_extractor.convolution(x)  # (N, hidden_size, K, K)        
-        x = self.image_extractor.relu_out(x)
+            x = self.image_extractor.convolution(x)  # (N, hidden_size, K, K)
 
         ### Offset captions for teacher forcing ###
         y_in, y_out = y[:, :, :-1], y[:, :, 1:]
@@ -271,13 +281,16 @@ class CaptioningRNN(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss = self.forward_step(batch, batch_idx)
         if batch_idx % 100 == 0:
-            #  Periodically log minibatch of predictions with their images
+            # Periodically try to log minibatch of predictions with their images
             images = batch["image"][:5]
             preds = self.forward(batch)[:5]
             ground_truth = batch["captions"][:5]
             captions = ground_truth[:, : preds.shape[1], :]
-            examples = log_wandb_preds(self.tokenizer, images, preds, captions)
-            wandb.log({"val_examples": examples}, commit=False)
+            try:
+                examples = log_wandb_preds(self.tokenizer, images, preds, captions)
+                wandb.log({"val_examples": examples}, commit=False)
+            except wandb.Error:
+                pass
         self.log("val_loss", loss)
 
     def test_step(self, batch, batch_idx):
@@ -299,7 +312,7 @@ class CaptioningRNN(pl.LightningModule):
             )
         if self.scheduler:
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, patience=5, min_lr=1e-6
+                optimizer, patience=3, min_lr=1e-6
             )
             return {
                 "optimizer": optimizer,
@@ -331,7 +344,7 @@ class CaptioningRNN(pl.LightningModule):
             "fc_init": "xavier",  # or "kaiming", None
             "label_smoothing_epsilon": 0.05,  # float - 0. to turn off label smoothing
             "inference_beam_width": 10,  # int - 1 to turn off beam search
-            "inference_beam_alpha": 1.0,  # float - higher numbers favor shorter captions
+            "inference_beam_alpha": 0.9,  # float - higher numbers favor shorter captions
             "learning_rate": 3e-4,  # float; also configurable in trainer
             "optimizer": "adam",  # or "sgd"; also configurable in trainer
             "scheduler": "plateau",  # or None; also configurable in trainer

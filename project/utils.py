@@ -63,10 +63,11 @@ def log_wandb_preds(tokenizer, images, preds, ground_truth):
 @dataclass
 class Candidate:
     words_so_far: list
-    yn: torch.tensor  # (wordvec_dim,)
+    yn: torch.Tensor  # (wordvec_dim,)
     hn: Union[torch.Tensor, None]  # (hidden_dim,)
     cn: Union[torch.Tensor, None]  # (hidden_dim,)
     states: Union[tuple, None]
+    attn_weights: Union[torch.Tensor, None] = None
 
 
 @dataclass
@@ -89,6 +90,7 @@ def batch_beam_search(
     which_rnn: int = 0,
     alpha: float = 0.7,
     beam_width: int = 10,
+    need_weights: bool = False,
 ):
     """[summary]
     yn: (batch_size, 1, wordvec_dim)
@@ -104,6 +106,14 @@ def batch_beam_search(
         dtype=torch.long,
     )
     captions[:, 0] = rnn_captioner._start
+
+    if need_weights:
+        pixels = features.shape[-1]
+        batch_attn_weights = torch.empty(
+            (batch_size, max_length, pixels, pixels),
+            device=features.device,
+            dtype=features.dtype,
+        )
 
     for i in range(batch_size):
         yn = yns[i : i + 1, :, :]
@@ -121,11 +131,21 @@ def batch_beam_search(
         feature = (
             None if features is None else features[i : i + 1, :, :, :]
         )  # (1, num_features, pixels, pixels)
+        attn_weights = (
+            None
+            if not need_weights
+            else torch.empty(max_length, features.shape[-1], features.shape[-1])
+        )
         best = single_beam_search(
             [
                 PQCandidate(
                     candidate=Candidate(
-                        words_so_far=[], yn=yn, hn=hn, cn=cn, states=state
+                        words_so_far=[],
+                        yn=yn,
+                        hn=hn,
+                        cn=cn,
+                        states=state,
+                        attn_weights=attn_weights,
                     )
                 )
             ],
@@ -135,10 +155,15 @@ def batch_beam_search(
             which_rnn=which_rnn,
             alpha=alpha,
             beam_width=beam_width,
+            need_weights=need_weights,
         )
         captions[i, 1:] = torch.tensor(
             best.candidate.words_so_far, dtype=captions.dtype, device=captions.device
         )
+        if need_weights:
+            batch_attn_weights[i, :, :, :] = best.candidate.attn_weights
+    if need_weights:
+        return captions, batch_attn_weights
     return captions
 
 
@@ -150,6 +175,7 @@ def single_beam_search(
     which_rnn: int = 0,
     alpha: float = 0.7,
     beam_width: int = 10,
+    need_weights: bool = False,
 ):
     """
     TODO: Vectorize this fully loopy implementation of beam search
@@ -162,7 +188,14 @@ def single_beam_search(
         to_consider = heapq.merge(
             to_consider,
             get_new_candidates(
-                candidate, rnn_captioner, features, which_rnn, beam_width, alpha
+                candidate,
+                rnn_captioner,
+                features,
+                which_rnn,
+                beam_width,
+                alpha,
+                need_weights,
+                num_words_left,
             ),
         )
     candidates = islice(to_consider, beam_width)
@@ -174,6 +207,7 @@ def single_beam_search(
         which_rnn=which_rnn,
         alpha=alpha,
         beam_width=beam_width,
+        need_weights=need_weights,
     )
 
 
@@ -184,6 +218,8 @@ def get_new_candidates(
     which_rnn: int = 0,
     num_new: int = 1,
     alpha: float = 0.7,
+    need_weights: bool = False,
+    num_words_left: int = 0,
 ):
     """Generate list of new candidates from a given candidate, with their priorities
 
@@ -210,11 +246,24 @@ def get_new_candidates(
             (candidate.states[0].contiguous(), candidate.states[1].contiguous()),
         )
         hn, cn = None, None
-    else:  # rnn_captioner.rnn_type == 'attention'
+    elif need_weights:  # rnn_captioner.rnn_type == 'attention'
+        output, hn, cn, attn_weights = getattr(
+            rnn_captioner.decoder, "rnn%d" % which_rnn
+        )(candidate.yn, features, candidate.hn, candidate.cn, need_weights=need_weights)
+        states = None
+    else:
         output, hn, cn = getattr(rnn_captioner.decoder, "rnn%d" % which_rnn)(
-            candidate.yn, features, candidate.hn, candidate.cn
+            candidate.yn,
+            features,
+            candidate.hn,
+            candidate.cn,
+            need_weights=need_weights,
         )
         states = None
+    if need_weights:
+        current_word = candidate.attn_weights.shape[0] - num_words_left
+        attn_weights = attn_weights.rename(None)
+        candidate.attn_weights[current_word, :, :] = attn_weights.squeeze()
     scores = getattr(rnn_captioner.fc_scorer, "fc%d" % which_rnn)(output)
     topk_scores, idxs = scores.topk(k=num_new, dim=2)  # (1, 1, num_new)
     topk_scores = F.log_softmax(topk_scores, dim=2).squeeze()  # (num_new,)
@@ -229,6 +278,10 @@ def get_new_candidates(
     ret = []
     norm_factor = 1.0 / (len(candidate.words_so_far) + 1e-7) * alpha
     for i in range(idxs.shape[0]):
+        if need_weights:
+            attn_weights = candidate.attn_weights.clone()
+        else:
+            attn_weights = None
         priority = (old_priority + (-1 * topk_scores[i])) / norm_factor
         heapq.heappush(
             ret,
@@ -240,6 +293,7 @@ def get_new_candidates(
                     hn=hn,
                     cn=cn,
                     states=states,
+                    attn_weights=attn_weights,
                 ),
             ),
         )
