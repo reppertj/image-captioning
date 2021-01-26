@@ -392,7 +392,7 @@ class TokenizeTransform:
     def __call__(self, captions):
         """ A list of strings to a tensor """
         if isinstance(self.tokenizer, BertWordPieceTokenizer):
-            return torch.tensor([t.ids for t in self.tokenizer.encode_batch(captions)])
+            return torch.tensor([t.ids for t in self.tokenizer.encode_batch(captions, add_special_tokens=False)])
         else:
             return torch.tensor([t for t in self.tokenizer.encode_batch(captions)])
 
