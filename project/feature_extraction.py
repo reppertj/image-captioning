@@ -150,7 +150,6 @@ class ImageFeatureExtractor(nn.Module):
             self.convolution = None
         self.projection_in = projection_in
         self.projection_out = projection_out
-        self.relu_out = nn.ReLU()
 
     def init_weights(self, method="kaiming"):
         """ Initialize weights/biases in convolution and projector layers """
@@ -209,10 +208,10 @@ class WordEmbedder(nn.Module):
             nn.init.kaiming_normal_(self.embedder.weight)
         elif method == "xavier":
             nn.init.xavier_normal_(self.embedder.weight)
-        
+
         with torch.no_grad():
             # We want the padding weights to remain zero
-            self.embedder.weight[self._pad].fill_(0.)
+            self.embedder.weight[self._pad].fill_(0.0)
 
     def forward(self, x):
         return self.embedder(x)
