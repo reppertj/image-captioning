@@ -1,6 +1,9 @@
 from warnings import warn
+
+import torch
 from torch import nn
-from project.datasets import BOS, EOS, UNK, PAD
+
+from project.datasets import BOS, EOS, PAD, UNK
 
 
 class RNN(nn.Module):
@@ -272,17 +275,21 @@ class ParallelAttentionLSTM(nn.Module):
         #         [getattr(self, "rnn%d" % i)._parameters[b] for b in biases]
         # ))
 
-    def forward(self, wds, feat, hn=None, cn=None):
+    def forward(self, wds, feat, hn=None, cn=None, need_weights=False):
         rnn_outs = {}
         if hn is None:
             for i in range(self.num_rnns):
                 rnn_outs["rnn%d" % i] = getattr(self, "rnn%d" % i)(
-                    wds[:, i, :, :], feat
+                    wds[:, i, :, :], feat, need_weights=need_weights
                 )
         else:
             for i in range(self.num_rnns):
                 rnn_outs["rnn%d" % i] = getattr(self, "rnn%d" % i)(
-                    wds[:, i, :, :], feat, hn[:, i, :], cn[:, i, :]
+                    wds[:, i, :, :],
+                    feat,
+                    hn[:, i, :],
+                    cn[:, i, :],
+                    need_weights=need_weights,
                 )
         return rnn_outs
 
@@ -321,7 +328,7 @@ class AttentionLSTM(nn.Module):
             input_size=self.input_size, hidden_size=self.hidden_size,
         )
 
-    def forward(self, wds, feat, hn=None, cn=None):
+    def forward(self, wds, feat, hn=None, cn=None, need_weights=False):
         """ wds: (batch_size, seq_len, input_size)
             feat: (batch_size, num_features, pixels, pixels)
             hn: (batch_size, hidden_dim)
@@ -331,6 +338,7 @@ class AttentionLSTM(nn.Module):
             raise ValueError("hidden and context matrices must be passed together")
         batch_size = wds.shape[0]
         out = wds.new(batch_size, wds.shape[1], self.hidden_size)
+        pixels = feat.shape[-1]
         key = feat.permute(2, 3, 0, 1).flatten(0, 1)  # (kdim, N, num_features)
         if hn is None:
             hn = self.initial_hidden(
@@ -338,19 +346,21 @@ class AttentionLSTM(nn.Module):
             ).unsqueeze(
                 0
             )  # (1, N, hidden_size)
-            cn = self.mha(key=key, value=key, query=hn, need_weights=False)[0].squeeze(
-                0
-            )  # (N, hidden_size)
+            cn, attn_weights = self.mha(key=key, value=key, query=hn, need_weights=True)
+            cn = cn.squeeze(0)  # (N, hidden_size)
             hn = hn.squeeze(0)  # (N, hidden_size)
         for i in range(wds.shape[1]):
             hn, cn = self.lstm(wds[:, i, :], (hn, cn))
             out[:, i, :] = hn
             hn = hn.unsqueeze(0)
-            cn = self.mha(key=key, value=key, query=hn, need_weights=False)[0].squeeze(
-                0
-            )
+            cn, attn_weights = self.mha(key=key, value=key, query=hn, need_weights=True)
+            cn = cn.squeeze(0)
             hn = hn.squeeze(0)
-        return out, hn, cn
+        if need_weights:
+            attn_weights = attn_weights.permute(1, 0, 2).unflatten(2, (('H', pixels), ('W', pixels)))  # (N, seq_len, pixels, pixels)
+            return out, hn, cn, attn_weights
+        else:
+            return out, hn, cn
 
 
 class ParallelFCScorer(nn.Module):
