@@ -306,6 +306,10 @@ class CaptioningRNN(pl.LightningModule):
             optimizer = torch.optim.Adam(
                 self.parameters(), betas=(self.momentum, 0.999), lr=self.learning_rate
             )
+        elif self.optimizer == "adamw":
+            optimizer = torch.optim.AdamW(
+                self.parameters(), betas=(self.momentum, 0.999), lr=self.learning_rate
+            )
         else:
             optimizer = torch.optim.SGD(
                 self.parameters(), lr=self.learning_rate, momentum=self.momentum
