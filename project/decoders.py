@@ -23,9 +23,10 @@ class RNN(nn.Module):
         self.hidden_size = hidden_size
         self.num_rnns = num_rnns
         self.num_layers = num_layers
-        self.nonlinearity = nonlinearity
         self.dropout = dropout
         self.bidirectional = bidirectional
+        
+        self.nonlinearity = 'tanh' if nonlinearity is None else nonlinearity
 
         for i in range(num_rnns):
             setattr(
@@ -35,7 +36,7 @@ class RNN(nn.Module):
                     self.input_size,
                     self.hidden_size,
                     num_layers=self.num_layers,
-                    nonlinearity=nonlinearity,
+                    nonlinearity=self.nonlinearity,
                     batch_first=True,
                     dropout=dropout,
                     bidirectional=bidirectional,

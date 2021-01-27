@@ -65,9 +65,10 @@ def test_captioner_overfit():
 
     bleu_score = bleu(preds.squeeze(), batch["captions"])
     assert bleu_score > 0.99
-    
 
-def test_inference_step():
+
+@mark.parametrize("rnn_type", ["rnn", "lstm", "gru", "attention"])
+def test_inference_step(rnn_type):
     seed_everything(42)
 
     wandb.run = MagicMock()
@@ -89,6 +90,7 @@ def test_inference_step():
 
     config = CaptioningRNN.default_config()
 
+    config["rnn_type"] = rnn_type
     config["batch_size"] = 4
     config["rnn_dropout"] = False
     config["label_smoothing_epsilon"] = 0.0
@@ -108,12 +110,18 @@ def test_inference_step():
     trainer.fit(model)
 
     batch = next(iter(model.datamodule.train_dataloader()))
-    with torch.no_grad():
-        model.eval()
-        preds, attn_weights = model.forward(batch, return_attn=True)
+
+    if rnn_type == "attention":
+        with torch.no_grad():
+            model.eval()
+            preds, attn_weights = model.forward(batch, return_attn=True)
+            assert torch.is_tensor(attn_weights)
+            assert attn_weights.shape[:3] == (4, 1, 25)
+            assert attn_weights.shape[3] == attn_weights.shape[4]
+    else:
+        with torch.no_grad():
+            model.eval()
+            preds = model.forward(batch)
 
     assert torch.is_tensor(preds)
     assert preds.shape == (4, 1, 26)
-    assert torch.is_tensor(attn_weights)
-    assert attn_weights.shape[:3] == (4, 1, 25)
-    assert attn_weights.shape[3] == attn_weights.shape[4]

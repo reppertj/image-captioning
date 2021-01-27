@@ -54,7 +54,7 @@ class CaptioningRNN(pl.LightningModule):
 
         if self.rnn_type in ("rnn", "lstm", "gru"):
             self.image_extractor = ImageFeatureExtractor(
-                encoder=config["image_encoder"], projection_out=["hidden_size"],
+                encoder=config["image_encoder"], projection_out=config["hidden_size"],
             )
         elif self.rnn_type in ("attention"):
             self.image_extractor = ImageFeatureExtractor(
@@ -91,7 +91,7 @@ class CaptioningRNN(pl.LightningModule):
             self.decoder = RNN(
                 input_size=self.wordvec_dim,
                 hidden_size=config["hidden_size"],
-                num_rnns=["num_rnns"],
+                num_rnns=config["num_rnns"],
                 num_layers=config["num_rnn_layers"],
                 nonlinearity=config["rnn_nonlinearity"],
                 dropout=self.rnn_dropout,
@@ -325,7 +325,7 @@ class CaptioningRNN(pl.LightningModule):
             }
         else:
             return {
-                "optimzer": optimizer,
+                "optimizer": optimizer,
             }
 
     @classmethod
