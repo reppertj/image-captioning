@@ -12,6 +12,7 @@
 This project is a framework for experimenting with decoder-encoder image captioning models using Pytorch and Pytorch Lightning. Although it is a toy implementation for educational purposes, it includes several elements not found in some other image captioning explainers, including customizable preprocessing and augmentation, label smoothing, and configurable beam search.
 
 ![Visualize attention weights for other pictures with the notebook below](weights-visuals.png)
+*A picture of the author*
 ## Notebooks
 
 For a demo, check out the first notebook.
