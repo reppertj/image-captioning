@@ -10,4 +10,4 @@ matplotlib
 Pillow
 sklearn
 tokenizers
-pyarrow==0.17.1
+pyarrow==14.0.1
